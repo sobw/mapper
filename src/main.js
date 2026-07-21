@@ -81,18 +81,18 @@ const descriptionInput = document.querySelector('#map-description');
 class CalibratedImageOverlay extends L.Layer {
   onAdd(map) {
     this.map = map;
-    this.img = L.DomUtil.create('img', 'calibrated-overlay leaflet-zoom-animated');
+    this.img = L.DomUtil.create('img', 'calibrated-overlay');
     this.img.src = customImage;
     this.img.style.opacity = opacity.value;
     this.img.style.width = `${customImageSize.width}px`;
     this.img.style.height = `${customImageSize.height}px`;
     map.getPanes().overlayPane.appendChild(this.img);
-    map.on('zoom move viewreset', this.update, this);
+    map.on('move zoom zoomend viewreset resize', this.update, this);
     this.update();
   }
 
   onRemove(map) {
-    map.off('zoom move viewreset', this.update, this);
+    map.off('move zoom zoomend viewreset resize', this.update, this);
     this.img?.remove();
   }
 
@@ -100,12 +100,45 @@ class CalibratedImageOverlay extends L.Layer {
     if (!this.img || points.length < 2) return;
     const pairs = points.map((point) => ({
       source: point.image,
-      target: leafletMap.latLngToLayerPoint(point.latlng),
+      target: this.map.latLngToLayerPoint(point.latlng),
     }));
-    const matrix = solveAffine(pairs);
+    const matrix = solveImageTransform(pairs);
+    if (!matrix) {
+      this.img.hidden = true;
+      status('Kalibrační body jsou příliš blízko u sebe nebo leží v jedné přímce. Přidej/posuň body dál od sebe.');
+      return;
+    }
+    this.img.hidden = false;
     this.img.style.transformOrigin = '0 0';
     this.img.style.transform = `matrix(${matrix.a}, ${matrix.b}, ${matrix.c}, ${matrix.d}, ${matrix.e}, ${matrix.f})`;
   }
+}
+
+function solveImageTransform(pairs) {
+  if (pairs.length === 2) return solveSimilarity(pairs);
+  return solveAffine(pairs);
+}
+
+function solveSimilarity(pairs) {
+  const [first, second] = pairs;
+  const sourceDx = second.source.x - first.source.x;
+  const sourceDy = second.source.y - first.source.y;
+  const targetDx = second.target.x - first.target.x;
+  const targetDy = second.target.y - first.target.y;
+  const sourceLengthSq = sourceDx ** 2 + sourceDy ** 2;
+  if (sourceLengthSq < 1) return null;
+
+  const scaleCos = (targetDx * sourceDx + targetDy * sourceDy) / sourceLengthSq;
+  const scaleSin = (targetDy * sourceDx - targetDx * sourceDy) / sourceLengthSq;
+
+  return {
+    a: scaleCos,
+    b: scaleSin,
+    c: -scaleSin,
+    d: scaleCos,
+    e: first.target.x - scaleCos * first.source.x + scaleSin * first.source.y,
+    f: first.target.y - scaleSin * first.source.x - scaleCos * first.source.y,
+  };
 }
 
 function solveAffine(pairs) {
@@ -117,6 +150,7 @@ function solveAffine(pairs) {
     addEquation(normal, [0, 0, x, y, 0, 1], Y);
   }
   const solved = gaussian(normal);
+  if (!solved) return null;
   return { a: solved[0], c: solved[1], b: solved[2], d: solved[3], e: solved[4], f: solved[5] };
 }
 
@@ -134,8 +168,9 @@ function gaussian(matrix) {
     for (let row = col + 1; row < n; row++) {
       if (Math.abs(matrix[row][col]) > Math.abs(matrix[pivot][col])) pivot = row;
     }
+    if (Math.abs(matrix[pivot][col]) < 1e-9) return null;
     [matrix[col], matrix[pivot]] = [matrix[pivot], matrix[col]];
-    const divisor = matrix[col][col] || 1e-12;
+    const divisor = matrix[col][col];
     for (let j = col; j <= n; j++) matrix[col][j] /= divisor;
     for (let row = 0; row < n; row++) {
       if (row === col) continue;
@@ -143,7 +178,8 @@ function gaussian(matrix) {
       for (let j = col; j <= n; j++) matrix[row][j] -= factor * matrix[col][j];
     }
   }
-  return matrix.map((row) => row[n]);
+  const result = matrix.map((row) => row[n]);
+  return result.every(Number.isFinite) ? result : null;
 }
 
 function boot() {
@@ -159,10 +195,20 @@ function boot() {
 
 function initMap() {
   if (leafletMap) return;
-  leafletMap = L.map('map').setView([49.8175, 15.473], 7);
+  leafletMap = L.map('map', {
+    preferCanvas: true,
+    zoomAnimation: true,
+  }).setView([49.8175, 15.473], 7);
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    maxZoom: 19,
     attribution: '&copy; OpenStreetMap contributors',
+    detectRetina: true,
+    errorTileUrl:
+      'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256"%3E%3Crect width="256" height="256" fill="%23eef3f8"/%3E%3Cpath d="M0 128H256M128 0V256" stroke="%23d8e1ec"/%3E%3C/svg%3E',
+    keepBuffer: 4,
+    maxNativeZoom: 19,
+    maxZoom: 22,
+    updateWhenIdle: false,
+    updateWhenZooming: true,
   }).addTo(leafletMap);
   realMarkerLayer = L.layerGroup().addTo(leafletMap);
   leafletMap.on('click', (event) => {
@@ -203,7 +249,7 @@ function refreshOverlay() {
   points.forEach((point, index) => L.marker(point.latlng).bindTooltip(`${index + 1}`).addTo(realMarkerLayer));
   overlayLayer?.remove();
   overlayLayer = null;
-  if (customImage && points.length >= 2) overlayLayer = new CalibratedImageOverlay().addTo(leafletMap);
+  if (leafletMap && customImage && points.length >= 2) overlayLayer = new CalibratedImageOverlay().addTo(leafletMap);
 }
 
 function renderPoints() {
@@ -213,10 +259,19 @@ function renderPoints() {
       <button type="button" data-remove-point="${index}">×</button>
     </li>
   `).join('');
+  renderImageMarkers();
+}
+
+function renderImageMarkers() {
+  if (!imageMarkerLayer || !customImageSize) return;
+  imageMarkerLayer.innerHTML = points.map((point, index) => `
+    <span class="image-marker" style="left: ${(point.image.x / customImageSize.width) * 100}%; top: ${(point.image.y / customImageSize.height) * 100}%">${index + 1}</span>
+  `).join('');
 }
 
 function renderCustomImage() {
   customMap.innerHTML = '';
+  imageMarkerLayer = null;
   if (!customImage) {
     customMap.innerHTML = '<span>Nahraj obrázek mapy</span>';
     return;
@@ -228,6 +283,7 @@ function renderCustomImage() {
   imageMarkerLayer = document.createElement('div');
   imageMarkerLayer.className = 'image-markers';
   customMap.append(imageMarkerLayer);
+  renderImageMarkers();
 }
 
 function getMaps() {
