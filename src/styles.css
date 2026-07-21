@@ -98,3 +98,19 @@ li button { border-radius: 999px; margin-left: 0.4rem; padding: 0.1rem 0.45rem; 
   .panel { max-height: none; }
   #map { min-height: 65vh; }
 }
+.image-marker {
+  align-items: center;
+  background: #1769e0;
+  border: 2px solid white;
+  border-radius: 999px;
+  box-shadow: 0 2px 8px rgba(23, 32, 51, 0.24);
+  color: white;
+  display: flex;
+  font-size: 0.75rem;
+  font-weight: 900;
+  height: 1.45rem;
+  justify-content: center;
+  position: absolute;
+  transform: translate(-50%, -50%);
+  width: 1.45rem;
+}
