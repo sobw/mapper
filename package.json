@@ -1,0 +1,11 @@
+{
+  "name": "mapper-mvp",
+  "version": "0.1.0",
+  "private": true,
+  "description": "MVP webove aplikace pro kalibraci vlastnich mapovych podkladu nad OpenStreetMap.",
+  "type": "module",
+  "scripts": {
+    "start": "python3 -m http.server 5173",
+    "check": "node --check src/main.js"
+  }
+}
